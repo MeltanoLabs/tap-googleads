@@ -1,9 +1,12 @@
 """Tests the tap using a mock proxy oauth config."""
 
+import contextlib
+import io
+import json
 import unittest
+from unittest import mock
 
 import responses
-import singer_sdk.singerlib as singer
 
 import tap_googleads.tests.utils as test_utils
 from tap_googleads.tap import TapGoogleAds
@@ -23,24 +26,6 @@ class TestTapGoogleadsWithProxyOAuthCredentials(unittest.TestCase):
             "developer_token": "1234",
         }
         responses.reset()
-        del test_utils.SINGER_MESSAGES[:]
-        TapGoogleAds.write_message = test_utils.accumulate_singer_messages
-
-    def test_proxy_oauth_discovery(self):
-        """Test basic discover sync with proxy refresh credentials"""
-
-        catalog = TapGoogleAds(config=self.mock_config).discover_streams()
-
-        # Assert the correct number of default streams found
-        self.assertEqual(len(catalog), 11, "Total streams from default catalog")
-
-    @responses.activate
-    def test_proxy_oauth_refresh(self):
-        """Test proxy oauth refresh"""
-
-        tap = test_utils.set_up_tap_with_custom_catalog(
-            self.mock_config, ["stream_accessible_customers"]
-        )
 
         responses.add(
             responses.POST,
@@ -49,38 +34,61 @@ class TestTapGoogleadsWithProxyOAuthCredentials(unittest.TestCase):
             status=200,
         )
 
+        patcher = mock.patch("tap_googleads.dynamic_query_stream.DynamicQueryStream.get_fields_metadata")
+
+        mock_get_fields_metadata = patcher.start()
+        mock_get_fields_metadata.side_effect = lambda fields: {
+            f: {
+                "name": f,
+                "dataType": "STRING",
+            }
+            for f in fields
+        }
+
+        self.addCleanup(patcher.stop)
+
+    def test_proxy_oauth_discovery(self):
+        """Test basic discover sync with proxy refresh credentials"""
+
+        catalog = TapGoogleAds(config=self.mock_config, setup_mapper=False).discover_streams()
+
+        # Assert the correct number of default streams found
+        self.assertEqual(len(catalog), 22, "Total streams from default catalog")
+
+    @responses.activate
+    def test_proxy_oauth_refresh(self):
+        """Test proxy oauth refresh"""
+
+        tap = test_utils.set_up_tap_with_custom_catalog(self.mock_config, ["accessible_customers"])
+
         responses.add(
             responses.GET,
-            "https://googleads.googleapis.com/v21/customers:listAccessibleCustomers",
+            "https://googleads.googleapis.com/v25/customers:listAccessibleCustomers",
             json=test_utils.accessible_customer_return_data,
             status=200,
         )
 
-        tap.sync_all()
+        captured_stdout = io.StringIO()
+        with contextlib.redirect_stdout(captured_stdout):
+            tap.sync_all()
 
         # Assert first oauth token call is using pre set refresh_proxy_url_auth
 
-        oauth_refresh_request_token = responses.calls[0].request.headers[
-            "Authorization"
-        ]
+        oauth_refresh_request_token = responses.calls[0].request.headers["Authorization"]
 
         self.assertEqual(oauth_refresh_request_token, "Bearer proxy_url_token")
 
         # Assert that returned refresh token is used in the call.
 
-        accessible_customers_request_token = responses.calls[1].request.headers[
-            "Authorization"
-        ]
+        accessible_customers_request_token = responses.calls[1].request.headers["Authorization"]
 
-        self.assertEqual(
-            accessible_customers_request_token, "Bearer refresh_token_updated"
-        )
+        self.assertEqual(accessible_customers_request_token, "Bearer refresh_token_updated")
 
         # Assert that messages are output from sync (its actually working).
-        self.assertEqual(len(test_utils.SINGER_MESSAGES), 15)
-        self.assertIsInstance(test_utils.SINGER_MESSAGES[0], singer.StateMessage)
-        self.assertIsInstance(test_utils.SINGER_MESSAGES[1], singer.SchemaMessage)
-        self.assertIsInstance(test_utils.SINGER_MESSAGES[2], singer.RecordMessage)
+        singer_messages = [json.loads(line) for line in captured_stdout.getvalue().splitlines()]
 
-        for msg in test_utils.SINGER_MESSAGES[3:]:
-            self.assertIsInstance(msg, singer.StateMessage)
+        self.assertEqual(singer_messages[0]["type"], "SCHEMA")
+        self.assertEqual(singer_messages[1]["type"], "RECORD")
+
+        for msg in singer_messages[2:]:
+            self.assertEqual(msg["type"], "STATE")

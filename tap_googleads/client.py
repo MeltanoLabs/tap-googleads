@@ -26,11 +26,14 @@ class ResumableAPIError(Exception):
 class GoogleAdsStream(RESTStream):
     """GoogleAds stream class."""
 
-    url_base = "https://googleads.googleapis.com/v21"
-    rest_method = "POST"
+    http_method = "POST"
     records_jsonpath = "$[*]"  # Or override `parse_response`.
     next_page_token_jsonpath = "$.nextPageToken"  # Or override `get_next_page_token`.
     _LOG_REQUEST_METRIC_URLS: bool = True
+
+    @cached_property
+    def url_base(self) -> str:
+        return f"https://googleads.googleapis.com/{self.config['api_version']}"
 
     def response_error_message(self, response: requests.Response) -> str:
         """Build error message for invalid http statuses.
@@ -83,7 +86,7 @@ class GoogleAdsStream(RESTStream):
         auth_url = auth_url + "&grant_type=refresh_token"
 
         if client_id and client_secret and refresh_token:
-            return GoogleAdsAuthenticator(stream=self, auth_endpoint=auth_url)
+            return GoogleAdsAuthenticator(auth_endpoint=auth_url)
 
         oauth_credentials = self.config.get("oauth_credentials", {})
 
@@ -98,7 +101,6 @@ class GoogleAdsStream(RESTStream):
         auth_headers["Accept"] = "application/json"
 
         return ProxyGoogleAdsAuthenticator(
-            stream=self,
             auth_endpoint=oauth_credentials.get("refresh_proxy_url"),
             auth_body=auth_body,
             auth_headers=auth_headers,

@@ -9,31 +9,47 @@ on:
   pull_request:
     paths-ignore: [README.md]
 
+permissions:
+  contents: read
+
+env:
+  FORCE_COLOR: 1
+
 jobs:
-  pytest:
+  build-package:
+    name: Build & verify package
     runs-on: ubuntu-latest
+    outputs:
+      supported-python-versions: ${{ steps.baipp.outputs.supported_python_classifiers_json_array }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: hynek/build-and-inspect-python-package@d44ca7d91762de7a7d5436ddae667c6da6d1c3df # v2.18.0
+        id: baipp
+
+  pytest:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: build-package
     env:
       GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
     strategy:
       fail-fast: false
       matrix:
-        python-version:
-        - "3.10"
-        - "3.11"
-        - "3.12"
-        - "3.13"
+        python-version: ${{ fromJson(needs.build-package.outputs.supported-python-versions) }}
     steps:
-    - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-      id: setup-python
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - name: Install uv
+      uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Install uv
-      uses: astral-sh/setup-uv@d9e0f98d3fc6adb07d1e3d37f3043649ddad06a1 # v6.5.0
     - name: Test with pytest
       env:
         PYTEST_ADDOPTS: --ignore tap_googleads/tests/test_core.py
-        UV_PYTHON: ${{ steps.setup-python.outputs.python-path }}
+        TOXENV: ${{ matrix.python-version }}
       run: |
-        uv run pytest
+        uvx --with=tox-uv tox
