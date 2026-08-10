@@ -1,7 +1,6 @@
 """GoogleAds tap class."""
 
 from datetime import datetime, timedelta, timezone
-from typing import List
 
 from singer_sdk import Stream, Tap
 from singer_sdk import typing as th  # JSON schema typing helpers
@@ -152,13 +151,19 @@ class TapGoogleAds(Tap):
             default=False,
         ),
         th.Property(
+            "api_version",
+            th.StringType,
+            description="Google Ads API version to use - see [versioning](https://developers.google.com/google-ads/api/docs/concepts/versioning) and [upgrade your API version](https://developers.google.com/google-ads/api/docs/upgrade).",
+            default="v25",
+        ),
+        th.Property(
             "custom_queries",
             th.ArrayType(
                 th.ObjectType(
                     th.Property(
                         "query",
                         th.StringType,
-                        description='A custom defined GAQL query for building the report. Do not include segments.date filter in the query, it is automatically added. For more information, refer to <a href="https://developers.google.com/google-ads/api/fields/v19/overview_query_builder">Google\'s documentation</a>.',
+                        description='A custom defined GAQL query for building the report. Do not include segments.date filter in the query, it is automatically added. For more information, refer to <a href="https://developers.google.com/google-ads/api/fields/v25/overview_query_builder">Google\'s documentation</a>.',
                     ),
                     th.Property(
                         "name",
@@ -178,13 +183,10 @@ class TapGoogleAds(Tap):
 
         return super().setup_mapper()
 
-    def discover_streams(self) -> List[Stream]:
+    def discover_streams(self) -> list[Stream]:
         """Return a list of discovered streams."""
         streams = [stream_class(tap=self) for stream_class in STREAM_TYPES]
         if self.config.get("enable_click_view_report_stream"):
             streams.append(ClickViewReportStream(tap=self))
-        streams.extend(
-            CustomQueryStream(tap=self, custom_query=q)
-            for q in self.config["custom_queries"]
-        )
+        streams.extend(CustomQueryStream(tap=self, custom_query=q) for q in self.config["custom_queries"])
         return streams

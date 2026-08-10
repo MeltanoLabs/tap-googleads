@@ -22,7 +22,7 @@ SCHEMAS_DIR = Path(__file__).parent / Path("./schemas")
 class AccessibleCustomers(GoogleAdsStream):
     """Accessible Customers."""
 
-    rest_method = "GET"
+    http_method = "GET"
     path = "/customers:listAccessibleCustomers"
     name = "accessible_customers"
     primary_keys = ("resourceNames",)

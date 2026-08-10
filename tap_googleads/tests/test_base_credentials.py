@@ -1,9 +1,12 @@
 """Tests the tap using a mock base credentials config."""
 
+import contextlib
+import io
+import json
 import unittest
+from unittest import mock
 
 import responses
-import singer_sdk.singerlib as singer
 from singer_sdk.exceptions import ConfigValidationError
 
 import tap_googleads.tests.utils as test_utils
@@ -24,50 +27,59 @@ class TestTapGoogleadsWithBaseCredentials(unittest.TestCase):
             "developer_token": "1234",
         }
         responses.reset()
-        del test_utils.SINGER_MESSAGES[:]
 
-        TapGoogleAds.write_message = test_utils.accumulate_singer_messages
+        patcher = mock.patch("tap_googleads.dynamic_query_stream.DynamicQueryStream.get_fields_metadata")
+
+        mock_get_fields_metadata = patcher.start()
+        mock_get_fields_metadata.side_effect = lambda fields: {
+            f: {
+                "name": f,
+                "dataType": "STRING",
+            }
+            for f in fields
+        }
+
+        self.addCleanup(patcher.stop)
 
     def test_base_credentials_discovery(self):
         """Test basic discover sync with Bearer Token"""
 
-        catalog = TapGoogleAds(config=self.mock_config).discover_streams()
+        catalog = TapGoogleAds(config=self.mock_config, setup_mapper=False).discover_streams()
 
         # expect valid catalog to be discovered
-        self.assertEqual(len(catalog), 11, "Total streams from default catalog")
+        self.assertEqual(len(catalog), 22, "Total streams from default catalog")
 
     @responses.activate
     def test_googleads_sync_accessible_customers(self):
         """Test sync."""
 
-        tap = test_utils.set_up_tap_with_custom_catalog(
-            self.mock_config, ["stream_accessible_customers"]
-        )
+        tap = test_utils.set_up_tap_with_custom_catalog(self.mock_config, ["accessible_customers"])
 
         responses.add(
             responses.POST,
-            "https://www.googleapis.com/oauth2/v4/token?refresh_token=1234&client_id=1234"
-            + "&client_secret=1234&grant_type=refresh_token",
+            "https://www.googleapis.com/oauth2/v4/token?refresh_token=1234&client_id=1234" + "&client_secret=1234&grant_type=refresh_token",
             json={"access_token": 12341234, "expires_in": 3622},
             status=200,
         )
 
         responses.add(
             responses.GET,
-            "https://googleads.googleapis.com/v21/customers:listAccessibleCustomers",
+            "https://googleads.googleapis.com/v25/customers:listAccessibleCustomers",
             json=test_utils.accessible_customer_return_data,
             status=200,
         )
 
-        tap.sync_all()
+        captured_stdout = io.StringIO()
+        with contextlib.redirect_stdout(captured_stdout):
+            tap.sync_all()
 
-        self.assertEqual(len(test_utils.SINGER_MESSAGES), 15)
-        self.assertIsInstance(test_utils.SINGER_MESSAGES[0], singer.StateMessage)
-        self.assertIsInstance(test_utils.SINGER_MESSAGES[1], singer.SchemaMessage)
-        self.assertIsInstance(test_utils.SINGER_MESSAGES[2], singer.RecordMessage)
+        singer_messages = [json.loads(line) for line in captured_stdout.getvalue().splitlines()]
 
-        for msg in test_utils.SINGER_MESSAGES[3:]:
-            self.assertIsInstance(msg, singer.StateMessage)
+        self.assertEqual(singer_messages[0]["type"], "SCHEMA")
+        self.assertEqual(singer_messages[1]["type"], "RECORD")
+
+        for msg in singer_messages[2:]:
+            self.assertEqual(msg["type"], "STATE")
 
     def test_valid_customer_id_config(self):
         non_hypenated_customer_id = "1234567890"
